@@ -17,6 +17,8 @@ import (
 )
 
 func TestContentEncoding(t *testing.T) {
+	t.Parallel()
+
 	zstdDecode := func(in []byte) []byte {
 		var b bytes.Buffer
 		zw, err := zstd.NewWriter(&b)
@@ -102,41 +104,45 @@ func TestContentEncoding(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		content := make([]byte, 128)
-		rand.New(rand.NewSource(1)).Read(content)
+		tc := tc
+		t.Run(tc.encodingHeader, func(t *testing.T) {
+			t.Parallel()
+			content := make([]byte, 128)
+			rand.New(rand.NewSource(1)).Read(content)
 
-		s := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			compressedContent := content
-			for _, enc := range tc.encodingFuncs {
-				compressedContent = enc(compressedContent)
+			s := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				compressedContent := content
+				for _, enc := range tc.encodingFuncs {
+					compressedContent = enc(compressedContent)
+				}
+				rw.Header().Set("content-length", fmt.Sprintf("%d", len(compressedContent)))
+				rw.Header().Set("Content-Encoding", tc.encodingHeader)
+				_, _ = rw.Write(compressedContent)
+			}))
+			defer s.Close()
+
+			u, err := url.Parse(s.URL)
+			if err != nil {
+				t.Fatal(err)
 			}
-			rw.Header().Set("content-length", fmt.Sprintf("%d", len(compressedContent)))
-			rw.Header().Set("Content-Encoding", tc.encodingHeader)
-			rw.Write(compressedContent)
-		}))
-		defer s.Close()
 
-		u, err := url.Parse(s.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
+			rs := NewHTTPReadSeeker(context.TODO(), http.DefaultClient, u.String(), func(r *http.Response) error { return nil })
 
-		rs := NewHTTPReadSeeker(context.TODO(), http.DefaultClient, u.String(), func(r *http.Response) error { return nil })
-
-		b, err := io.ReadAll(rs)
-		if err != nil {
-			t.Fatal(err)
-		}
-		expected := content
-		if len(b) != len(expected) {
-			t.Errorf("unexpected length %d, expected %d", len(b), len(expected))
-			return
-		}
-		for i, c := range expected {
-			if b[i] != c {
-				t.Errorf("unexpected byte %x at %d, expected %x", b[i], i, c)
+			b, err := io.ReadAll(rs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := content
+			if len(b) != len(expected) {
+				t.Errorf("unexpected length %d, expected %d", len(b), len(expected))
 				return
 			}
-		}
+			for i, c := range expected {
+				if b[i] != c {
+					t.Errorf("unexpected byte %x at %d, expected %x", b[i], i, c)
+					return
+				}
+			}
+		})
 	}
 }
